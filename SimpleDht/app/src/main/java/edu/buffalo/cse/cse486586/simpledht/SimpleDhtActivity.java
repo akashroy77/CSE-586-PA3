@@ -17,6 +17,8 @@ public class SimpleDhtActivity extends Activity {
         tv.setMovementMethod(new ScrollingMovementMethod());
         findViewById(R.id.button3).setOnClickListener(
                 new OnTestClickListener(tv, getContentResolver()));
+        //Ldump button implementation
+        //ToDO Implement two buttons Ldump and Gdump
     }
 
     @Override
