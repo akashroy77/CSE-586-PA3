@@ -20,10 +20,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import android.content.ContentProvider;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
+import android.database.DatabaseUtils;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.telephony.TelephonyManager;
@@ -36,6 +39,7 @@ public class SimpleDhtProvider extends ContentProvider {
     //https://developer.android.com/training/data-storage/sqlite.html
     //instantiating subclass of SQLiteOpenHelper:
     KeyValueTableDBHelper dbHelper;
+    ContentResolver contentResolver;
     static final int SERVER_PORT=10000;
     static final String global_identifier="*";
     static final String local_identifier="@";
@@ -49,8 +53,10 @@ public class SimpleDhtProvider extends ContentProvider {
     ConcurrentHashMap<String,Integer> emulatorHash=new ConcurrentHashMap<String,Integer>();
     HashMap<String,String> successorMap= new HashMap<String, String>();
     HashMap<String,String> predecessorMap= new HashMap<String, String>();
-    String sequenceSucc=null;
-    String sequencePred=null;
+    private String sequenceSucc= null;
+    int sequenceSuccPort=0;
+    private String sequencePred= null;
+    int sequencePredPort=0;
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -78,25 +84,70 @@ public class SimpleDhtProvider extends ContentProvider {
          * take a look at the code for PA1.
          */
         /*
-        Log.d("insert","db created");
-        // Gets the data repository in write mode
-        dbHelper = new KeyValueTableDBHelper(getContext());
-
-        SQLiteDatabase db = dbHelper.getWritableDatabase();
-        Log.d("insert","db created");
-        //https://stackoverflow.com/questions/11686645/android-sqlite-insert-update-table-columns-to-keep-the-identifieradd .
-        //https://developer.android.com/training/data-htmlstorage/sqlite.
-        // Insert the new row, returning the primary key value of the new row
-        long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
 
         Log.d("insert", values.toString());
         return uri;*/
+        try
+        {
+            Log.d("insert","db created");
+            // Gets the data repository in write mode
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            String key=(String)values.get("key");
+            String hashedKey=null;
+            Log.d("Insert",key);
+            try {
+                    hashedKey=genHash(key);
+            } catch (NoSuchAlgorithmException e) {
+                e.printStackTrace();
+            }
+            Log.d("Insert",sequenceSucc);
+            Log.d("Insert",sequencePred);
+            //If only there is one AVD
+            if((sequenceSucc.equals(null) && sequencePred.equals(null)) || (sequenceSucc.equals(sequencePred))){
+                Log.d("insert","db created");
+                //https://stackoverflow.com/questions/11686645/android-sqlite-insert-update-table-columns-to-keep-the-identifieradd .
+                //https://developer.android.com/training/data-htmlstorage/sqlite.
+                // Insert the new row, returning the primary key value of the new row
+               // long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
+                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
+            }
+            //If the Key belongs to this AVD
+            else{
+                if(hashedKey.compareTo(genHash(Integer.toString(clientPort)))<=0 && sequencePred.compareTo(hashedKey)<0){
+           //         long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
+                    db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                    Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
+                }
+                // For the circle part
+                // First node's predecessor will be greater than its own value
+                else if(sequencePred.compareTo(genHash(Integer.toString(clientPort)))<0){
+                    if(sequencePred.compareTo(hashedKey)<0 || hashedKey.compareTo(genHash(Integer.toString(clientPort)))<=0){
+                        //long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
+                        db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                        Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
+                    }
+                }
+                else {
+                    // Sending From =":"+ TAG + "Sending TO PORT"+":"+ Sending to Hash+":"+KEY+":"+VALUE
+                    String outputSuccQuery=clientPort+":"+"INSERT"+":"+sequenceSuccPort+":"+sequenceSucc+":"+key+":"+values.get("value");
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,outputSuccQuery);
+                    Log.d("INSERT","Sending to "+clientPort+" From "+sequenceSuccPort);
+                }
+            }
+        }
+        catch (Exception ex){
+            ex.printStackTrace();
+        }
+
         return uri;
     }
 
     @Override
     public boolean onCreate() {
         emulatorMap=helper.fillHashMap(emulatorMap);
+        dbHelper = new KeyValueTableDBHelper(getContext());
+        contentResolver=(this.getContext()).getContentResolver();
         try {
             /*
              * Create a server socket as well as a thread (AsyncTask) that listens on the server
@@ -156,8 +207,36 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
+        //https://developer.android.com/training/data-storage/sqlite.html
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        SQLiteQueryBuilder queryBuilder=new SQLiteQueryBuilder();
+        queryBuilder.setTables(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME);
+        Cursor cursor=null;
+        Log.d("Select",selection);
+        if(sequencePred.equals(sequenceSucc)) {
+            if (selection != null) {
+//             cursor = db.query(
+//                    KeyValueTableContract.KeyValueTableEntry.TABLE_NAME,   // The table to query
+//                    null,             // The array of columns to return (pass null to get all)
+//                    "key=?",              // The columns for the WHERE clause
+//                     new String[]{selection},          // The values for the WHERE clause
+//                    null,                   // don't group the rows
+//                    null,                   // don't filter by row groups
+//                    sortOrder               // The sort order
+//            );
+                if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
+                    Log.d("Insert", "here");
+                    //     String selectQuery = "SELECT * FROM " + KeyValueTableContract.KeyValueTableEntry.TABLE_NAME;
+                    cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
+                    Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                } else {
+                    cursor = queryBuilder.query(db, null, "key=" + "'" + selection + "'", null, null, null, null);
+                }
+            }
+        }
+        return cursor;
+      //  Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
         // TODO Auto-generated method stub
-        return null;
     }
 
     @Override
@@ -181,10 +260,10 @@ public class SimpleDhtProvider extends ContentProvider {
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
-        int sequence_number=0;
+       // int sequence_number=0;
         int i=0;
         int j=0;
-        Uri providerUri= Uri.parse("content://edu.buffalo.cse.cse486586.groupmessenger2.provider");
+    //    Uri providerUri= Uri.parse("content://edu.buffalo.cse.cse486586.groupmessenger2.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
             ServerSocket serverSocket = sockets[0];
@@ -261,6 +340,8 @@ public class SimpleDhtProvider extends ContentProvider {
                         Log.d("Successor Added",hashed_emu+": S"+" "+successor);
                         Log.d("Here","Before getting");
                         int succEmulator=Integer.parseInt(messages[3]);
+                        sequenceSuccPort=succEmulator;
+                        Log.d("PORT S",Integer.toString(sequenceSuccPort));
                         Log.d("Succ Port",Integer.toString(succEmulator));
                         int port_emu=succEmulator;
                         int e=succEmulator/2;
@@ -290,6 +371,8 @@ public class SimpleDhtProvider extends ContentProvider {
                         sequencePred=predecessor;
                         Log.d("Predecessor Added",hashed_emu+": P"+" "+predecessor);
                         int predEmulator=Integer.parseInt(messages[3]);
+                        sequencePredPort=predEmulator;
+                        Log.d("PortP",Integer.toString(sequencePredPort));
                         int port_emu=predEmulator;
                         String port=Integer.toString(port_emu);
                         String clientMessage=port+":"+"SUCC_SEQUENCE"+":"+hashed_emu+":"+receivedPort;
@@ -302,6 +385,51 @@ public class SimpleDhtProvider extends ContentProvider {
                             }
                         }
                         Log.d("Predecessor",sequencePred);
+                    }
+                    else if(operations[3].equals(operation)){
+                        Log.d("SERVER","In Message INSERT");
+                        //Storing Value to the Database Using Content Provider
+                        ContentValues keyValueToInsert = new ContentValues();
+                        Uri providerUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
+                        int successorPort=Integer.parseInt(messages[3]);
+                        Log.d("Insert SUCC",Integer.toString(successorPort));
+                        String sucessorHash=messages[4];
+                        String key=messages[5];
+                        String value=messages[6];
+                        String hashedKey=genHash(key);
+                        if(sequenceSucc.equals(null) && sequencePred.equals(null)){
+                            // Calling Insert
+                            keyValueToInsert.put("key",key);
+                            keyValueToInsert.put("value",value);
+                            contentResolver.insert(providerUri,keyValueToInsert);
+                            Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
+                        }
+                        else {
+                            if (hashedKey.compareTo(sucessorHash) <= 0 && sequencePred.compareTo(hashedKey) < 0) {
+                                // Calling Insert
+                                keyValueToInsert.put("key",key);
+                                keyValueToInsert.put("value",value);
+                                contentResolver.insert(providerUri,keyValueToInsert);
+                                Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
+                            }
+                            // For the circle part
+                            // First node's predecessor will be greater than its own value
+                            else if (sequencePred.compareTo(sucessorHash) < 0) {
+                                if (sequencePred.compareTo(hashedKey) < 0 || hashedKey.compareTo(sucessorHash) <= 0) {
+                                    // Calling Insert
+                                    keyValueToInsert.put("key",key);
+                                    keyValueToInsert.put("value",value);
+                                    contentResolver.insert(providerUri,keyValueToInsert);
+                                    Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
+                                }
+                            } else {
+                                // Sending From =":"+ TAG + "Sending TO PORT"+":"+ Sending to Hash+":"+KEY+":"+VALUE
+                                String outputSuccQuery = clientPort + ":" + "INSERT" + ":" + sequenceSuccPort + ":" + sequenceSucc + ":" + key + ":" + value;
+                                callClient(outputSuccQuery);
+                                Log.d("INSERT", "Sending to " + clientPort + " From " + sequenceSuccPort);
+                            }
+                        }
+
                     }
                 }
             }
@@ -412,6 +540,23 @@ public class SimpleDhtProvider extends ContentProvider {
                 }
                 catch (Exception ex)
                 {
+                    ex.printStackTrace();
+                }
+            }
+            else if(operation.equals(operations[3])){
+                try {
+                    Log.d("Operation Client",messages[2]);
+                    String receivedPort=messages[1];
+                    String sendingPort=messages[3];
+                    String key=messages[5];
+                    String value=messages[6];
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(receivedPort));
+                    DataOutputStream outputStream=new DataOutputStream(socket.getOutputStream());
+                    String outputToServer=receivedPort+":"+"INSERT"+":"+sendingPort+":"+messages[4]+":"+key+":"+value;
+                    Log.d("INSERT Client",outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                }
+                catch (Exception ex){
                     ex.printStackTrace();
                 }
             }

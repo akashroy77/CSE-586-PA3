@@ -7,11 +7,12 @@ import android.util.Log;
 
 //https://developer.android.com/training/data-storage/sqlite.html
 public class KeyValueTableDBHelper extends SQLiteOpenHelper {
+    private static final String TEXT_TYPE = " TEXT";
     //CREATE method for the database table
     private static final String SQL_CREATE_ENTRIES =
             "CREATE TABLE " + KeyValueTableContract.KeyValueTableEntry.TABLE_NAME + " ("+
-                    KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY + " TEXT PRIMARY KEY," +
-                    KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE + " TEXT)";
+                    KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY + TEXT_TYPE + "UNIQUE"+","+
+                    KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE + TEXT_TYPE+");";
 
     ////DELETE method for the database table
     private static final String SQL_DELETE_ENTRIES =
