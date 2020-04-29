@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.IllegalCharsetNameException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.DatabaseUtils;
+import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
@@ -36,6 +38,7 @@ import android.widget.TextView;
 import static android.content.ContentValues.TAG;
 
 public class SimpleDhtProvider extends ContentProvider {
+
     //https://developer.android.com/training/data-storage/sqlite.html
     //instantiating subclass of SQLiteOpenHelper:
     KeyValueTableDBHelper dbHelper;
@@ -47,16 +50,16 @@ public class SimpleDhtProvider extends ContentProvider {
     int clientPort=0;
     final static int[] remote_ports= new int[]{11108, 11112, 11116, 11120,11124};
     SimpleDhtHelper helper=new SimpleDhtHelper();
-    static  final String[] operations= new String[]{"JOIN","SUCC_SEQUENCE","PRED_SEQUENCE","INSERT","QUERY","DELETE"};
-    List<String> nodes = new ArrayList<String>();
+    static  final String[] operations= new String[]{"JOIN","SUCC_SEQUENCE","PRED_SEQUENCE","INSERT","ALL_QUERY","SINGLE_QUERY","QUERY_RESPONSE","DELETE"};
+    List<Integer> nodes = new ArrayList<Integer>();
+    List<String> hashedNodes=new ArrayList<String>();
     HashMap<Integer,Integer> emulatorMap=new HashMap<Integer, Integer>();
-    ConcurrentHashMap<String,Integer> emulatorHash=new ConcurrentHashMap<String,Integer>();
-    HashMap<String,String> successorMap= new HashMap<String, String>();
-    HashMap<String,String> predecessorMap= new HashMap<String, String>();
-    private String sequenceSucc= null;
-    int sequenceSuccPort=0;
-    private String sequencePred= null;
-    int sequencePredPort=0;
+    List<String> allQuery=new ArrayList<String>();
+    String sequenceSucc=" ";
+    String sequencePred=" ";
+    String hashedPort=" ";
+    boolean wait=false;
+    Cursor cursor=null;
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -83,63 +86,46 @@ public class SimpleDhtProvider extends ContentProvider {
          * internal storage option that we used in PA1. If you want to use that option, please
          * take a look at the code for PA1.
          */
-        /*
-
-        Log.d("insert", values.toString());
-        return uri;*/
-        try
-        {
-            Log.d("insert","db created");
-            // Gets the data repository in write mode
-            SQLiteDatabase db = dbHelper.getWritableDatabase();
-            String key=(String)values.get("key");
-            String hashedKey=null;
-            Log.d("Insert",key);
-            try {
-                    hashedKey=genHash(key);
-            } catch (NoSuchAlgorithmException e) {
-                e.printStackTrace();
-            }
-            Log.d("Insert",sequenceSucc);
-            Log.d("Insert",sequencePred);
-            //If only there is one AVD
-            if((sequenceSucc.equals(null) && sequencePred.equals(null)) || (sequenceSucc.equals(sequencePred))){
-                Log.d("insert","db created");
-                //https://stackoverflow.com/questions/11686645/android-sqlite-insert-update-table-columns-to-keep-the-identifieradd .
-                //https://developer.android.com/training/data-htmlstorage/sqlite.
-                // Insert the new row, returning the primary key value of the new row
-               // long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
+        // Gets the data repository in write mode
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        String key=(String)values.get("key");
+        String value=(String)values.get("value");
+        String hashedKey=null;
+        Log.d("Insert",key);
+        try {
+            hashedKey=genHash(key);
+            Log.d("Seq",sequencePred);
+            Log.d("Seq",sequenceSucc);
+            // Only One AVD
+            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)){
                 db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
-                Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
+                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
             }
-            //If the Key belongs to this AVD
-            else{
-                if(hashedKey.compareTo(genHash(Integer.toString(clientPort)))<=0 && sequencePred.compareTo(hashedKey)<0){
-           //         long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
-                    db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
-                    Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
-                }
-                // For the circle part
-                // First node's predecessor will be greater than its own value
-                else if(sequencePred.compareTo(genHash(Integer.toString(clientPort)))<0){
-                    if(sequencePred.compareTo(hashedKey)<0 || hashedKey.compareTo(genHash(Integer.toString(clientPort)))<=0){
-                        //long newRowId = db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE);
-                        db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
-                        Log.d("INSERT","Inserted in Same AVD "+clientPort+" : "+key);
-                    }
-                }
-                else {
-                    // Sending From =":"+ TAG + "Sending TO PORT"+":"+ Sending to Hash+":"+KEY+":"+VALUE
-                    String outputSuccQuery=clientPort+":"+"INSERT"+":"+sequenceSuccPort+":"+sequenceSucc+":"+key+":"+values.get("value");
-                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,outputSuccQuery);
-                    Log.d("INSERT","Sending to "+clientPort+" From "+sequenceSuccPort);
-                }
+            // Key is greater than the Last Chord Node
+            else if(hashedKey.compareTo(genHash(sequencePred))>0 && hashedKey.compareTo(hashedPort)>=0 && hashedPort.compareTo(genHash(sequencePred))<0){
+                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
+            }
+            else if(hashedKey.compareTo(genHash(sequencePred))<0 && hashedKey.compareTo(hashedPort)<=0 && hashedPort.compareTo(genHash(sequencePred))<0){
+                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
+            }
+            else if(hashedKey.compareTo(hashedPort)>0){
+                String insertMessage=clientPort+":"+"INSERT"+":"+sequenceSucc+":"+key+":"+value;
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,insertMessage);
+            }
+            else if(hashedKey.compareTo(genHash(sequencePred))>0 && hashedKey.compareTo(hashedPort)<=0){
+                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
+            }
+            else {
+                String insertMessage=clientPort+":"+"INSERT"+":"+sequenceSucc+":"+key+":"+value;
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,insertMessage);
             }
         }
         catch (Exception ex){
             ex.printStackTrace();
         }
-
         return uri;
     }
 
@@ -174,69 +160,164 @@ public class SimpleDhtProvider extends ContentProvider {
         Log.d("AVD",portStr);
         final String myPort = String.valueOf((Integer.parseInt(portStr) * 2));
         clientPort=Integer.parseInt(myPort);
-//        try {
-//            emulatorHash.put(genHash(myPort),Integer.parseInt(myPort));
-//        } catch (NoSuchAlgorithmException e) {
-//            e.printStackTrace();
-//        }
-        Log.d("onCreate",Integer.toString(clientPort));
-
-        //If the port is not avd0 send a join request
-//
-//        if(clientPort!=AVD0_PORT){
-//            int emulator=emulatorMap.get(AVD0_PORT);
-//            String hashed_emulator= null;
-//            try {
-//                hashed_emulator = genHash(Integer.toString(emulator));
-//            } catch (NoSuchAlgorithmException e) {
-//                e.printStackTrace();
-//            }
-//
-//            if(!nodes.contains(hashed_emulator)){
-//            nodes.add(hashed_emulator);
-//            emulatorHash.put(hashed_emulator,emulator);
-//            Log.d("Emu",hashed_emulator+" "+emulator);
-//            }
-//            String port=Integer.toString(clientPort);
-//            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,port+":"+"JOIN");
-//        }
         new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,myPort+":"+"JOIN");
         return false;
     }
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
-            String sortOrder) {
+                        String sortOrder) {
+        // TODO Auto-generated method stub
         //https://developer.android.com/training/data-storage/sqlite.html
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         SQLiteQueryBuilder queryBuilder=new SQLiteQueryBuilder();
         queryBuilder.setTables(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME);
-        Cursor cursor=null;
+        String[] queryType=selection.split(":");
+        String result=" ";
         Log.d("Select",selection);
-        if(sequencePred.equals(sequenceSucc)) {
-            if (selection != null) {
-//             cursor = db.query(
-//                    KeyValueTableContract.KeyValueTableEntry.TABLE_NAME,   // The table to query
-//                    null,             // The array of columns to return (pass null to get all)
-//                    "key=?",              // The columns for the WHERE clause
-//                     new String[]{selection},          // The values for the WHERE clause
-//                    null,                   // don't group the rows
-//                    null,                   // don't filter by row groups
-//                    sortOrder               // The sort order
-//            );
+        try {
+            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)) {
                 if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
-                    Log.d("Insert", "here");
-                    //     String selectQuery = "SELECT * FROM " + KeyValueTableContract.KeyValueTableEntry.TABLE_NAME;
+                    Log.d("Query", "here");
                     cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
                     Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
-                } else {
+                }
+                else {
                     cursor = queryBuilder.query(db, null, "key=" + "'" + selection + "'", null, null, null, null);
+                }
+                return cursor;
+            }
+//            else if(selection.equals(global_identifier)){
+//                String query=" ";
+//                    Log.d("Query For Own AVD", "here");
+//                    cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
+//                    Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+//                    //https://stackoverflow.com/questions/7420783/androids-sqlite-how-to-turn-cursors-into-strings
+//                    //https://developer.android.com/reference/android/database/sqlite/SQLiteCursor
+//                    if (cursor.moveToFirst()) {
+//                        while (!cursor.isAfterLast()) {
+//                            query += cursor.getColumnName(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + ":";
+//                            query += cursor.getColumnName(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
+//                        }
+//                    }
+//                    String inputQuery = query.substring(0, query.length() - 2);
+//                    Log.d("Query Added", inputQuery);
+//                    allQuery.add(inputQuery);
+//                    String queryMessage = clientPort + ":" + "QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY";
+//                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+//            }
+//            else if(queryType[0].equals(operations[5])){
+//                //Chord has come back to its root port
+//                if(queryType[0].equals(clientPort)) {
+//                    // https://stackoverflow.com/questions/28936424/converting-multidimentional-string-array-to-cursor
+//                    String keyColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
+//                    String valueColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
+//                    String[] columns = new String[] { keyColumn,valueColumn};
+//                    MatrixCursor matrixCursor=new MatrixCursor(columns);
+//                    for(String entry:allQuery){
+//                        String keyValue[]=entry.split("%%");
+//                        for (String subentry:keyValue){
+//                            String rows[]=subentry.split("%%");
+//                            matrixCursor.newRow().add(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE,rows[0]).add(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE,rows[1]);
+//                        }
+//                    }
+//                    return matrixCursor;
+//                }
+//                else {
+//                    String queryMessage = clientPort + ":" + "QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY";
+//                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+//                }
+//            }
+            else if(selection.equals(local_identifier)){
+                Log.d("Query", "here");
+                cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
+                Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                return cursor;
+            }
+            else {
+                Log.d("Query","Searching own AVD and then passing to others");
+                Log.d("Query",selection);
+                Log.d("Query",Integer.toString(queryType.length));
+                // Normal Query
+                // Pass it to other AVD
+                if(queryType.length==1){
+                    cursor=null;
+                    Log.d("Query","Searching OWN AVD");
+                    cursor = queryBuilder.query(db, null, "key=" + "'" + selection + "'", null, null, null, null);
+                    if(cursor.getCount()>0){
+                        return cursor;
+                    }
+                    else {
+                        Log.d("Query","Could not find in local AVD");
+                        String queryMessage = clientPort + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+selection;
+                        Log.d("Query",queryMessage);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                        while (true) {
+                            if(wait){
+                                break;
+                            }
+                        }
+                    }
+                }
+                else if(queryType.length>1){
+                    if(queryType[3].equals("LOCAL_QUERY")){
+                        String queryResult=" ";
+                        Log.d("Query","I am in the next AVD");
+                        Log.d("Query",queryType[4]);
+                        cursor = queryBuilder.query(db, null, "key=" + "'" + queryType[4] + "'", null, null, null, null);
+                        Log.d("Query", Integer.toString(cursor.getCount()));
+                        if(cursor.getCount()>0){
+                            Log.d("Query", "Found it");
+                            if(cursor.moveToFirst()) {
+                                Log.d("Query","Converting Cursor");
+                                do{
+                                    queryResult +=cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + ":";
+                                    queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
+                                }
+                                while (cursor.moveToNext());
+                            }
+                            String inputQuery = queryResult.substring(0, queryResult.length() - 2);
+                            Log.d("Query",inputQuery);
+                            int sendingEmulator=Integer.parseInt(queryType[0])/2;
+                            String queryMessage = clientPort + ":" + "QUERY_RESPONSE" + ":" + sendingEmulator + ":" + "RETURN"+":"+selection+":"+inputQuery;
+                            Log.d("Query",queryMessage);
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                        }
+                        else {
+                            Log.d("Query","Not Found so passing it to other");
+                            String queryMessage = queryType[0] + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+queryType[4];
+                            Log.d("Query",queryMessage);
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                        }
+                    }
                 }
             }
         }
+
+        catch (Exception ex){
+            cursor = null;
+            wait = true;
+            return cursor;
+        }
+        if (queryType.length>1 && queryType[1].equals(operations[6])){
+            Log.d("Query","In Response");
+            String[] outputs=new String[]{queryType[10].trim(),queryType[11]};
+            // https://stackoverflow.com/questions/28936424/converting-mult5mentional-string-array-to-cursor
+            String keyColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
+            String valueColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
+            String[] columns = new String[] {keyColumn,valueColumn};
+            MatrixCursor matrixCursor=new MatrixCursor(columns);
+            matrixCursor.addRow(outputs);
+            cursor=matrixCursor;
+            Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+            Log.d("Query",Integer.toString(cursor.getCount()));
+            return matrixCursor;
+        }
+        if (wait) {
+            wait = false;
+        }
+        Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
         return cursor;
-      //  Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
-        // TODO Auto-generated method stub
     }
 
     @Override
@@ -260,10 +341,8 @@ public class SimpleDhtProvider extends ContentProvider {
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
-       // int sequence_number=0;
         int i=0;
-        int j=0;
-    //    Uri providerUri= Uri.parse("content://edu.buffalo.cse.cse486586.groupmessenger2.provider");
+        Uri providerUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
             ServerSocket serverSocket = sockets[0];
@@ -277,159 +356,117 @@ public class SimpleDhtProvider extends ContentProvider {
                     String receivedMessage=inputStream.readUTF();
                     Log.d("Server",receivedMessage);
                     String[] messages=receivedMessage.split(":");
+                    //Port
                     int receivedPort=Integer.parseInt(messages[0]);
+                    //Operation
                     String operation=messages[1];
+                    //Emulator
+                    int emulator=Integer.parseInt(messages[2]);
+                    Log.d("Server1","Here");
                     Log.d("Server",messages[0]);
                     Log.d("Operation Here",messages[1]);
-                    Log.d("Server1","Here");
+                    Log.d("For Emualator",messages[2]);
                     if(operations[0].equals(operation))
                     {
-                        int emulator=emulatorMap.get(receivedPort);
-                        ChordNode chordNode=new ChordNode();
-                        String hashed_emulator=genHash(Integer.toString(emulator));
-                        Log.d("Emu",hashed_emulator+" "+emulator);
-                        nodes.add(hashed_emulator);
-                        emulatorHash.put(hashed_emulator,emulator);
-                        i++;
-                        Collections.sort(nodes,new CustomComparator());
-                        if(i==5)
-                        {
-                            Log.d("Sorted Nodes",nodes.get(0));
-                            Log.d("Sorted Nodes",nodes.get(1));
-                            Log.d("Sorted Nodes",nodes.get(2));
-                            Log.d("Sorted Nodes",nodes.get(3));
-                            Log.d("Sorted Nodes",nodes.get(4));
-                        }
-                        int nodePosition=nodes.indexOf(hashed_emulator);
-                        Log.d("Np",Integer.toString(nodePosition));
-                        //Set Successor
-                        //Last Node of the Chord
-                        if(nodePosition==nodes.size()-1){
-                            chordNode.setSuccessor(nodes.get(0));
-                        }
-                        else {
-                            Log.d("Succ",nodes.get(nodePosition+1));
-                            chordNode.setSuccessor(nodes.get(nodePosition+1));
-                        }
-                        String clientSuccessorOutputString=receivedPort+":"+"SUCC_SEQUENCE"+":"+ chordNode.getSuccessor()+":"+receivedPort;
-                        Log.d("Server","Sending Successor to Client"+clientSuccessorOutputString);
-                        callClient(clientSuccessorOutputString);
+                        try{
+                            String localSuccessor=" ";
+                            String localPredecessor=" ";
+                            String hashedEmu=genHash(Integer.toString(emulator));
+                            ChordNode chordNode=new ChordNode();
+                            Log.d("Emu",hashedEmu+" "+emulator);
+                            nodes.add(emulator);
+                            hashedNodes.add(hashedEmu);
+                            i++;
+                            Collections.sort(nodes,new CustomHashComparator());
+                            Collections.sort(hashedNodes,new CustomComparator());
+                            int nodePosition=nodes.indexOf(emulator);
+                            Log.d("Np",Integer.toString(nodePosition));
+                            Log.d("Size",Integer.toString(nodes.size()));
+                            //Set Successor
+                            //Last Node of the Chord
+                            if(nodePosition==nodes.size()-1){
+                                localSuccessor=Integer.toString(nodes.get(0));
+                                chordNode.setSuccessor(hashedNodes.get(0));
+                            }
+                            else {
+                                localSuccessor=Integer.toString(nodes.get(nodePosition+1));
+                                chordNode.setSuccessor(hashedNodes.get(nodePosition+1));
+                                Log.d("Succ", Integer.toString(nodes.get(nodePosition+1)));
+                            }
+                            //Set Predecessor
+                            //First Node of the Chord
+                            if(nodePosition==0){
+                                localPredecessor=Integer.toString(nodes.get(nodes.size()-1));
+                                chordNode.setPredecessor(hashedNodes.get(nodes.size()-1));
+                                Log.d("pred",localPredecessor);
+                            }
+                            else {
+                                localPredecessor=Integer.toString(nodes.get(nodePosition-1));
+                                chordNode.setPredecessor(hashedNodes.get(nodePosition-1));
+                            }
+                            String clientSuccessorOutputString=emulator+":"+"SUCC_SEQUENCE"+":"+localSuccessor+":"+" ";
+                            Log.d("Server","Sending Successor to Client"+clientSuccessorOutputString);
+                            callClient(clientSuccessorOutputString);
 
-                        //Set Predecessor
-                        //First Node of the Chord
-                        if(nodePosition==0){
-                            Log.d("pred",Integer.toString(nodes.size()));
-                            Log.d("pred",nodes.get(nodes.size()-1));
-                            chordNode.setPredecessor(nodes.get(nodes.size()-1));
+                            String clientPredOutputString=emulator+":"+"PRED_SEQUENCE"+":"+ localPredecessor+":"+" ";
+                            Log.d("Server","Sending Predecessor to Client"+clientPredOutputString);
+                            callClient(clientPredOutputString);
+
+                            String clientSelfSuccUpdate=localSuccessor+":"+"SUCC_SEQUENCE"+":"+ emulator+":"+"Reverse";
+                            callClient(clientSelfSuccUpdate);
+                            Log.d("Sending SelfSucc Update",clientSelfSuccUpdate);
+                            String clientSelfPredUpdate=localPredecessor+":"+"PRED_SEQUENCE"+":"+emulator+":"+"Reverse";
+                            callClient(clientSelfPredUpdate);
+                            Log.d("Sending SelfPred Update",clientSelfPredUpdate);
                         }
-                        else {
-                            chordNode.setPredecessor(nodes.get(nodePosition-1));
+                        catch (Exception ex){
+                            ex.printStackTrace();
                         }
-                        String clientPredOutputString=receivedPort+":"+"PRED_SEQUENCE"+":"+ chordNode.getPredecessor()+":"+receivedPort;
-                        Log.d("Server","Sending Predecessor to Client"+clientPredOutputString);
-                        callClient(clientPredOutputString);
                     }
                     else if (operations[1].equals(operation)){
+                        String localSuccessor=messages[0];
+                        Log.d("Local Successor",messages[0]);
                         Log.d("Server","In Successor Sequence");
-                        int emulator=emulatorMap.get(receivedPort);
-                        String hashed_emu=genHash(Integer.toString(emulator));
-                        String successor=messages[2];
-                        Log.d("Successor",messages[2]);
-                      //  successorMap.put(hashed_emu,successor);
-                        sequenceSucc=successor;
-                        Log.d("Successor Added",hashed_emu+": S"+" "+successor);
-                        Log.d("Here","Before getting");
-                        int succEmulator=Integer.parseInt(messages[3]);
-                        sequenceSuccPort=succEmulator;
-                        Log.d("PORT S",Integer.toString(sequenceSuccPort));
-                        Log.d("Succ Port",Integer.toString(succEmulator));
-                        int port_emu=succEmulator;
-                        int e=succEmulator/2;
-                        Log.d("Succ Port",Integer.toString(port_emu));
-                        String port=Integer.toString(port_emu);
-                        String clientMessage=port+":"+"PRED_SEQUENCE"+":"+hashed_emu+":"+receivedPort;
-                        Log.d("Sending Pred to client",clientMessage);
-                        Log.d("Received Port",Integer.toString(receivedPort));
-                        Log.d("Emu",Integer.toString(port_emu));
-                        Log.d("PreMap",genHash(Integer.toString(e)));
-                        if(!Integer.toString(receivedPort).equals(port)) {
-                            if (!port.equals(messages[4])){
-                                callClient(clientMessage);
-                            }
-
-                        }
-                        Log.d("Successor",sequenceSucc);
-                    }
-                    else if(operations[2].equals(operation)){
-                        Log.d("Server","IN Predecessor Sequence");
-                        int emulator=emulatorMap.get(receivedPort);
-
-                        String hashed_emu=genHash(Integer.toString(emulator));
-                        String predecessor=messages[2];
-                        Log.d("Predecessor",messages[2]);
-                      //  predecessorMap.put(hashed_emu,predecessor);
-                        sequencePred=predecessor;
-                        Log.d("Predecessor Added",hashed_emu+": P"+" "+predecessor);
-                        int predEmulator=Integer.parseInt(messages[3]);
-                        sequencePredPort=predEmulator;
-                        Log.d("PortP",Integer.toString(sequencePredPort));
-                        int port_emu=predEmulator;
-                        String port=Integer.toString(port_emu);
-                        String clientMessage=port+":"+"SUCC_SEQUENCE"+":"+hashed_emu+":"+receivedPort;
-                        Log.d("Sending Succ to client",clientMessage);
-                        Log.d("Port",port);
-                        Log.d("Received Port",Integer.toString(receivedPort));
-                        if(!Integer.toString(receivedPort).equals(port)) {
-                            if (!port.equals(messages[4])){
-                                callClient(clientMessage);
-                            }
-                        }
-                        Log.d("Predecessor",sequencePred);
-                    }
-                    else if(operations[3].equals(operation)){
-                        Log.d("SERVER","In Message INSERT");
-                        //Storing Value to the Database Using Content Provider
-                        ContentValues keyValueToInsert = new ContentValues();
-                        Uri providerUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
-                        int successorPort=Integer.parseInt(messages[3]);
-                        Log.d("Insert SUCC",Integer.toString(successorPort));
-                        String sucessorHash=messages[4];
-                        String key=messages[5];
-                        String value=messages[6];
-                        String hashedKey=genHash(key);
-                        if(sequenceSucc.equals(null) && sequencePred.equals(null)){
-                            // Calling Insert
-                            keyValueToInsert.put("key",key);
-                            keyValueToInsert.put("value",value);
-                            contentResolver.insert(providerUri,keyValueToInsert);
-                            Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
+                        if(messages[3].equals("Reverse")){
+                            sequenceSucc=localSuccessor;
                         }
                         else {
-                            if (hashedKey.compareTo(sucessorHash) <= 0 && sequencePred.compareTo(hashedKey) < 0) {
-                                // Calling Insert
-                                keyValueToInsert.put("key",key);
-                                keyValueToInsert.put("value",value);
-                                contentResolver.insert(providerUri,keyValueToInsert);
-                                Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
-                            }
-                            // For the circle part
-                            // First node's predecessor will be greater than its own value
-                            else if (sequencePred.compareTo(sucessorHash) < 0) {
-                                if (sequencePred.compareTo(hashedKey) < 0 || hashedKey.compareTo(sucessorHash) <= 0) {
-                                    // Calling Insert
-                                    keyValueToInsert.put("key",key);
-                                    keyValueToInsert.put("value",value);
-                                    contentResolver.insert(providerUri,keyValueToInsert);
-                                    Log.d("INSERT","Inserted in AVD"+Integer.toString(receivedPort)+key);
-                                }
-                            } else {
-                                // Sending From =":"+ TAG + "Sending TO PORT"+":"+ Sending to Hash+":"+KEY+":"+VALUE
-                                String outputSuccQuery = clientPort + ":" + "INSERT" + ":" + sequenceSuccPort + ":" + sequenceSucc + ":" + key + ":" + value;
-                                callClient(outputSuccQuery);
-                                Log.d("INSERT", "Sending to " + clientPort + " From " + sequenceSuccPort);
-                            }
+                            sequencePred=localSuccessor;
                         }
-
+                        Log.d("Final P Final S",sequencePred+" "+sequenceSucc);
+                    }
+                    else if(operations[2].equals(operation)){
+                        Log.d("Server","In Predecessor Sequence");
+                        String localPredecessor=messages[0];
+                        Log.d("Local Predecessor",messages[0]);
+                        if(messages[3].equals("Reverse")){
+                            sequencePred=localPredecessor;
+                        }
+                        else {
+                            sequenceSucc = localPredecessor;
+                        }
+                        Log.d("Final P Final S",sequencePred+" "+sequenceSucc);
+                    }
+                    else if(operations[3].equals(operation)){
+                        String key=messages[3];
+                        String value=messages[4];
+                        Log.d("Server","In Inside Sequence");
+                        //Storing Value to the Database Using Content Provider
+                        ContentValues keyValueToInsert = new ContentValues();
+                        // Calling Insert
+                        keyValueToInsert.put("key",key);
+                        keyValueToInsert.put("value",value);
+                        contentResolver.insert(providerUri,keyValueToInsert);
+                    }
+                    else if(operations[4].equals(operation)){
+                        query(providerUri,null,receivedMessage+":",null,null,null);
+                    }
+                    else if(operations[5].equals(operation)){
+                        query(providerUri,null,receivedMessage+":",null,null,null);
+                    }
+                    else if(operations[6].equals(operation)){
+                        query(providerUri,null,receivedMessage+":",null,null,null);
+                        wait=true;
                     }
                 }
             }
@@ -452,7 +489,7 @@ public class SimpleDhtProvider extends ContentProvider {
         }
 
         protected void setSuccessorAndPredecessor(String hash_id,String emulator){
-           // https://stackoverflow.com/questions/2784514/sort-arraylist-of-custom-objects-by-property
+            // https://stackoverflow.com/questions/2784514/sort-arraylist-of-custom-objects-by-property
 
         }
     }
@@ -475,93 +512,135 @@ public class SimpleDhtProvider extends ContentProvider {
             String operation= messages[1];
             if(operation.equals(operations[0])){
                 try {
-                    String successor=" ";
-                    String predecessor=" ";
+                    sequenceSucc=" ";
+                    sequencePred=" ";
+                    String port=messages[0];
+                    int emulator=Integer.parseInt(port)/2;
+                    hashedPort=genHash(String.valueOf(emulator));
                     Log.d("Client",requested_message+" wants to connect");
                     Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), AVD0_PORT);
                     Log.d("Client","Socket Created");
                     DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
-                    String client_message=requested_message+":"+successor+":"+predecessor;
+                    String client_message=port+":"+"JOIN"+":"+emulator;
                     Log.d("Message to send",client_message);
                     outputStream.writeUTF(client_message);
                 } catch (Exception e) {
-                    Log.e(TAG, "ClientTask UnknownHostException S");
+                    e.printStackTrace();
                 }
             }
             else if(operation.equals(operations[1])){
                 try {
-                    String receivedPortFromServer=messages[0];
                     String successor=messages[2];
-                    Log.d("Client",successor);
-                    int e=0;
-                    for (int i:remote_ports){
-                        Log.d("Hash",genHash(Integer.toString(i/2)));
-                        Log.d("P",successor);
-                        if(genHash(Integer.toString(i/2)).equals(successor))
-                        {
-                            e=i;
-                        }
-                        Log.d("e",Integer.toString(e));
-                    }
-
-                    Log.d("Port Succ Update",receivedPortFromServer);
-                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(receivedPortFromServer));
+                    int sendingPort=Integer.parseInt(successor)*2;
+                    String port= Integer.toString(sendingPort);
+                    Log.d("Client",port);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
                     DataOutputStream outputStream=new DataOutputStream(socket.getOutputStream());
-                    String outputToServer=receivedPortFromServer+":"+"SUCC_SEQUENCE"+":"+successor+":"+e+":"+messages[3];
-                    Log.d("Client Sending String",outputToServer);
+                    String outputToServer=requested_message;
+                    Log.d("Client Sending String",requested_message);
                     outputStream.writeUTF(outputToServer);
                 }
-                catch (Exception ex)
-                {
+                catch (Exception ex) {
                     ex.printStackTrace();
                 }
             }
             else if(operation.equals(operations[2])){
                 try {
-                    String receivedPortFromServer=messages[0];
                     String predecessor=messages[2];
                     Log.d("Client",predecessor);
-                    int e=0;
-                    for (int i:remote_ports){
-                        Log.d("Hash",genHash(Integer.toString(i/2)));
-                        Log.d("P",predecessor);
-                        if(genHash(Integer.toString(i/2)).equals(predecessor))
-                        {
-                            e=i;
-                        }
-                        Log.d("e",Integer.toString(e));
-                    }
-                    Log.d("Port Pred Update",receivedPortFromServer);
-                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(receivedPortFromServer));
+                    int sendingPort=Integer.parseInt(predecessor)*2;
+                    Log.d("Client",predecessor);
+                    String port=Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
                     DataOutputStream outputStream=new DataOutputStream(socket.getOutputStream());
-                    String outputToServer=receivedPortFromServer+":"+"PRED_SEQUENCE"+":"+predecessor+":"+e+":"+messages[3];
+                    String outputToServer=requested_message;
                     Log.d("Client Sending String",outputToServer);
                     outputStream.writeUTF(outputToServer);
                 }
-                catch (Exception ex)
-                {
+                catch (Exception ex) {
                     ex.printStackTrace();
                 }
             }
             else if(operation.equals(operations[3])){
                 try {
-                    Log.d("Operation Client",messages[2]);
-                    String receivedPort=messages[1];
-                    String sendingPort=messages[3];
-                    String key=messages[5];
-                    String value=messages[6];
-                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(receivedPort));
+                    String successor=messages[2];
+                    int sendingPort=Integer.parseInt(successor)*2;
+                    Log.d("Client",successor);
+                    String port=Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
                     DataOutputStream outputStream=new DataOutputStream(socket.getOutputStream());
-                    String outputToServer=receivedPort+":"+"INSERT"+":"+sendingPort+":"+messages[4]+":"+key+":"+value;
-                    Log.d("INSERT Client",outputToServer);
+                    String outputToServer=requested_message;
+                    Log.d("Client Sending String",outputToServer);
                     outputStream.writeUTF(outputToServer);
                 }
                 catch (Exception ex){
                     ex.printStackTrace();
                 }
             }
-
-        return null;
+            else if(operation.equals(operations[4])){
+                try {
+                    String successor = messages[2];
+                    int sendingPort = Integer.parseInt(successor) * 2;
+                    Log.d("Client", successor);
+                    String port = Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    String outputToServer = requested_message;
+                    Log.d("Client Sending String", outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+            }
+            else if(operation.equals(operations[5])){
+                try {
+                    String successor = messages[2];
+                    int sendingPort = Integer.parseInt(successor) * 2;
+                    Log.d("Client", successor);
+                    String port = Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    String outputToServer = requested_message;
+                    Log.d("Client Sending String", outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+            }
+            else if(operation.equals(operations[6])){
+                try {
+                    String successor = messages[2];
+                    int sendingPort = Integer.parseInt(successor) * 2;
+                    Log.d("Client", successor);
+                    String port = Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    String outputToServer = requested_message;
+                    Log.d("Client Sending String", outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+            }
+            return null;
+        }
+    }
+    class CustomHashComparator implements Comparator<Integer>
+    {
+        @Override
+        public int compare(Integer lhs, Integer rhs) {
+            String gen_x = null;
+            String gen_y = null;
+            try {
+                gen_x = genHash(Integer.toString(lhs));
+                gen_y = genHash(Integer.toString(rhs));
+            } catch (NoSuchAlgorithmException e) {
+                e.printStackTrace();
+            }
+            return gen_x.compareTo(gen_y);
         }
     }
 }

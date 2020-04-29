@@ -16,7 +16,7 @@ public class SimpleDhtActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_simple_dht_main);
-        
+
         final TextView tv = (TextView) findViewById(R.id.textView1);
         tv.setMovementMethod(new ScrollingMovementMethod());
         findViewById(R.id.button3).setOnClickListener(
@@ -80,6 +80,6 @@ public class SimpleDhtActivity extends Activity {
         }
 
         tv.setText(cursorToStr);
-    }    //d
+    }
 
 }
