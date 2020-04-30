@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.content.ContentProvider;
 import android.content.ContentResolver;
@@ -32,6 +33,7 @@ import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.telephony.TelephonyManager;
+import android.util.AtomicFile;
 import android.util.Log;
 import android.widget.TextView;
 
@@ -54,12 +56,15 @@ public class SimpleDhtProvider extends ContentProvider {
     List<Integer> nodes = new ArrayList<Integer>();
     List<String> hashedNodes=new ArrayList<String>();
     HashMap<Integer,Integer> emulatorMap=new HashMap<Integer, Integer>();
-    List<String> allQuery=new ArrayList<String>();
+    String outputQuery="";
     String sequenceSucc=" ";
     String sequencePred=" ";
     String hashedPort=" ";
     boolean wait=false;
     Cursor cursor=null;
+    MatrixCursor globalCursor=null;
+    AtomicBoolean flag=new AtomicBoolean(true);
+    Uri globalUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -173,10 +178,11 @@ public class SimpleDhtProvider extends ContentProvider {
         SQLiteQueryBuilder queryBuilder=new SQLiteQueryBuilder();
         queryBuilder.setTables(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME);
         String[] queryType=selection.split(":");
-        String result=" ";
         Log.d("Select",selection);
+
         try {
             if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)) {
+                cursor=null;
                 if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
                     Log.d("Query", "here");
                     cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
@@ -187,48 +193,135 @@ public class SimpleDhtProvider extends ContentProvider {
                 }
                 return cursor;
             }
-//            else if(selection.equals(global_identifier)){
-//                String query=" ";
-//                    Log.d("Query For Own AVD", "here");
-//                    cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
-//                    Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
-//                    //https://stackoverflow.com/questions/7420783/androids-sqlite-how-to-turn-cursors-into-strings
-//                    //https://developer.android.com/reference/android/database/sqlite/SQLiteCursor
-//                    if (cursor.moveToFirst()) {
-//                        while (!cursor.isAfterLast()) {
-//                            query += cursor.getColumnName(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + ":";
-//                            query += cursor.getColumnName(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
-//                        }
-//                    }
-//                    String inputQuery = query.substring(0, query.length() - 2);
-//                    Log.d("Query Added", inputQuery);
-//                    allQuery.add(inputQuery);
-//                    String queryMessage = clientPort + ":" + "QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY";
-//                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
-//            }
-//            else if(queryType[0].equals(operations[5])){
-//                //Chord has come back to its root port
-//                if(queryType[0].equals(clientPort)) {
-//                    // https://stackoverflow.com/questions/28936424/converting-multidimentional-string-array-to-cursor
-//                    String keyColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
-//                    String valueColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
-//                    String[] columns = new String[] { keyColumn,valueColumn};
-//                    MatrixCursor matrixCursor=new MatrixCursor(columns);
-//                    for(String entry:allQuery){
-//                        String keyValue[]=entry.split("%%");
-//                        for (String subentry:keyValue){
-//                            String rows[]=subentry.split("%%");
-//                            matrixCursor.newRow().add(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE,rows[0]).add(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE,rows[1]);
-//                        }
-//                    }
-//                    return matrixCursor;
-//                }
-//                else {
-//                    String queryMessage = clientPort + ":" + "QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY";
-//                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
-//                }
-//            }
+            else if(selection.equals(global_identifier)){
+                String queryResult=" ";
+                String inputQuery=" ";
+                String queryMessage=" ";
+                Log.d("Query For Own AVD", "here");
+                try {
+                    cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+                Log.d("Cursor",Integer.toString(cursor.getCount()));
+                Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                //https://stackoverflow.com/questions/7420783/androids-sqlite-how-to-turn-cursors-into-strings
+                //https://developer.android.com/reference/android/database/sqlite/SQLiteCursor
+                try {
+                    if (cursor.moveToFirst()) {
+                        Log.d("Query", "Converting Cursor");
+                        do {
+                            queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + "//";
+                            queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
+                            Log.d("Query", queryResult);
+                        } while (cursor.moveToNext());
+                        inputQuery = queryResult.substring(0, queryResult.length() - 2);
+                    }
+                    queryMessage = clientPort + ":" + "ALL_QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY" + ":" + inputQuery;
+                    Log.d("Query", queryMessage);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+                try {
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+                try {
+                    if (flag.get()) {
+                        Log.d("Waiting", Boolean.toString(flag.get()));
+                        Log.d("Wait","Waiting Here");
+                        Thread.sleep(8000);
+                    }
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
+
+                return globalCursor;
+            }
+            else if(queryType.length>2 && queryType[3].equals(operations[4])){
+                globalCursor=null;
+                Log.d("Query","Inside Global Query");
+                //Chord has come back to its root port
+                if(queryType[0].equals(Integer.toString(clientPort))) {
+                    Log.d("Query","Return All the Query Received");
+                    // https://stackoverflow.com/questions/28936424/converting-multidimentional-string-array-to-cursor
+                    String keyColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
+                    String valueColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
+                    String[] columns = new String[] { keyColumn,valueColumn};
+                    try {
+                        String allValues = queryType[4];
+                        Log.d("Query", allValues);
+                        String[] nodeQueries = allValues.split(" DELIMETER ");
+                        MatrixCursor matrixCursor = new MatrixCursor(columns);
+                        for (String entry : nodeQueries) {
+                            entry=entry.trim();
+                            Log.d("Query1", entry);
+                            if (!entry.equals(" ") && !entry.equals(null) && !entry.equals("")) {
+                                String keyValue[] = entry.split("%%");
+                                for (String subentry : keyValue) {
+                                    Log.d("Query2", subentry);
+                                    subentry=subentry.trim();
+                                    if(!subentry.equals(" ") && !subentry.equals("")) {
+                                        String rows[] = subentry.split("//");
+                                        String[] outputs = new String[]{rows[0].trim(), rows[1].trim()};
+                                        matrixCursor.addRow(outputs);
+                                    }
+                                }
+                            }
+                        }
+                        globalCursor = matrixCursor;
+                        cursor.close();
+                        flag.set(false);
+                    }
+                    catch (Exception ex){
+                        ex.printStackTrace();
+                    }
+                    //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                    //return matrixCursor;
+                }
+                else {
+                    String queryResult=" ";
+                    String inputQuery=" ";
+                    String queryMessage=" ";
+                    Log.d("Querying Next Successor", "here");
+                    cursor=query(globalUri,null,"@",null,null,null);
+                    Log.d("query", Integer.toString(cursor.getCount()));
+                     Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                    //https://stackoverflow.com/questions/7420783/androids-sqlite-how-to-turn-cursors-into-strings
+                    //https://developer.android.com/reference/android/database/sqlite/SQLiteCursor
+                    try {
+                        if (cursor.moveToFirst()) {
+                            Log.d("Query", "Converting Cursor");
+                            do {
+                                queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + "//";
+                                queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
+                            }
+                            while (cursor.moveToNext());
+                            inputQuery = queryResult.substring(0, queryResult.length() - 2);
+                        }
+                        outputQuery = queryType[4] + " DELIMETER " + inputQuery;
+                        Log.d("ABC", inputQuery);
+                        queryMessage = queryType[0] + ":" + "ALL_QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY" + ":" + outputQuery;
+                        Log.d("Sending", queryMessage);
+                    }
+                    catch (Exception ex){
+                        ex.printStackTrace();
+                    }
+                    try {
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                    }
+                    catch (Exception ex){
+                        ex.printStackTrace();
+                    }
+                }
+            }
             else if(selection.equals(local_identifier)){
+                cursor=null;
                 Log.d("Query", "here");
                 cursor = db.query(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null, null, null, null, null, null);
                 Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
@@ -297,7 +390,6 @@ public class SimpleDhtProvider extends ContentProvider {
         catch (Exception ex){
             cursor = null;
             wait = true;
-            return cursor;
         }
         if (queryType.length>1 && queryType[1].equals(operations[6])){
             Log.d("Query","In Response");
@@ -309,14 +401,15 @@ public class SimpleDhtProvider extends ContentProvider {
             MatrixCursor matrixCursor=new MatrixCursor(columns);
             matrixCursor.addRow(outputs);
             cursor=matrixCursor;
-            Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+            //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
             Log.d("Query",Integer.toString(cursor.getCount()));
             return matrixCursor;
         }
         if (wait) {
             wait = false;
         }
-        Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+       // Log.d("End",Integer.toString(globalCursor.getCount()));
+        Log.d("query", DatabaseUtils.dumpCursorToString(globalCursor));
         return cursor;
     }
 
@@ -459,7 +552,8 @@ public class SimpleDhtProvider extends ContentProvider {
                         contentResolver.insert(providerUri,keyValueToInsert);
                     }
                     else if(operations[4].equals(operation)){
-                        query(providerUri,null,receivedMessage+":",null,null,null);
+                        Log.d("Calling my query",receivedMessage);
+                        query(providerUri,null,receivedMessage,null,null,null);
                     }
                     else if(operations[5].equals(operation)){
                         query(providerUri,null,receivedMessage+":",null,null,null);

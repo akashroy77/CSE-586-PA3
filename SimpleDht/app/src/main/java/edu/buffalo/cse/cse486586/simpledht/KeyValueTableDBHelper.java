@@ -20,15 +20,15 @@ public class KeyValueTableDBHelper extends SQLiteOpenHelper {
 
     //https://developer.android.com/training/data-storage/sqlite.html
     // If we make changes in the DB then we need to increment the database version.
-    public static final int DATABASE_VERSION;
+    public static final int DATABASE_VERSION=2;
     public static final String DATABASE_NAME = "KeyValueStorage.db";
 
-    //Randomizing the DATABASE_VERSION so that it won't be same for two consecutive run
-    // and it will wipe the old data from all the avds
-    static{
-        DATABASE_VERSION = (int)(Math.random()*1000);
-        Log.d("DBHelper","current db version is :"+DATABASE_VERSION);
-    }
+//    //Randomizing the DATABASE_VERSION so that it won't be same for two consecutive run
+//    // and it will wipe the old data from all the avds
+//    static{
+//        DATABASE_VERSION = (int)(Math.random()*1000);
+//        Log.d("DBHelper","current db version is :"+DATABASE_VERSION);
+//    }
     public KeyValueTableDBHelper(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
     }
