@@ -6,19 +6,14 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.charset.IllegalCharsetNameException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.content.ContentProvider;
@@ -52,7 +47,7 @@ public class SimpleDhtProvider extends ContentProvider {
     int clientPort=0;
     final static int[] remote_ports= new int[]{11108, 11112, 11116, 11120,11124};
     SimpleDhtHelper helper=new SimpleDhtHelper();
-    static  final String[] operations= new String[]{"JOIN","SUCC_SEQUENCE","PRED_SEQUENCE","INSERT","ALL_QUERY","SINGLE_QUERY","QUERY_RESPONSE","DELETE"};
+    static  final String[] operations= new String[]{"JOIN","SUCC_SEQUENCE","PRED_SEQUENCE","INSERT","ALL_QUERY","SINGLE_QUERY","QUERY_RESPONSE","ALL_DELETE","SINGLE_DELETE"};
     List<Integer> nodes = new ArrayList<Integer>();
     List<String> hashedNodes=new ArrayList<String>();
     HashMap<Integer,Integer> emulatorMap=new HashMap<Integer, Integer>();
@@ -63,12 +58,77 @@ public class SimpleDhtProvider extends ContentProvider {
     boolean wait=false;
     Cursor cursor=null;
     MatrixCursor globalCursor=null;
+    MatrixCursor allCursor=null;
     AtomicBoolean flag=new AtomicBoolean(true);
+    AtomicBoolean flag1=new AtomicBoolean(true);
     Uri globalUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         // TODO Auto-generated method stub
+        // Gets the data repository in write mode
+        // https://stackoverflow.com/questions/9599741/how-to-delete-all-records-from-table-in-sqlite-with-android
+        int response=0;
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        String[] deleteType=selection.split(":");
+        Cursor cursor=null;
+        try {
+            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)) {
+                if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
+                    Log.d("Delete", "here");
+                    response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                }
+                else {
+                    // Gets the data repository in write mode
+                    String[] whereCondition = {selection};
+                    response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY + "=?", whereCondition);
+                }
+                return response;
+            }
+            else if(selection.equals(local_identifier)){
+                Log.d("Delete","Deleting local AVD");
+                response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                return response;
+            }
+            else if(selection.equals(global_identifier)){
+                Log.d("Delete","Deleting my own query");
+                response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                String deleteQuery=clientPort+":"+"ALL_DELETE"+":"+sequenceSucc+":"+"REPEAT";
+                Log.d("Delete",deleteQuery);
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,deleteQuery);
+                return response;
+            }
+            else if(deleteType.length>3 && deleteType[3].equals("REPEAT")){
+                // Chord has reached its root node
+                if(deleteType[0].equals(clientPort)){
+                    Log.d("Delete","All Delete are complete");
+                    return 1;
+                }
+                else {
+                    // Delete Next Successor's Query
+                    db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                    String deleteQuery=deleteType[0]+":"+"ALL_DELETE"+":"+sequenceSucc+":"+"REPEAT";
+                    Log.d("Delete",deleteQuery);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,deleteQuery);
+                }
+            }
+            else {
+                cursor=query(globalUri,null,selection+":",null,null,null);
+                if(cursor!=null && cursor.getCount()>0){
+                    response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                    return response;
+                }
+                else {
+                    // Forwarding Delete
+                    String deleteQuery=clientPort+":"+"LOCAL_DELETE"+":"+sequenceSucc;
+                    Log.d("Successor Delete",deleteQuery);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,deleteQuery);
+                }
+            }
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+
         return 0;
     }
 
@@ -345,11 +405,17 @@ public class SimpleDhtProvider extends ContentProvider {
                         String queryMessage = clientPort + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+selection;
                         Log.d("Query",queryMessage);
                         new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
-                        while (true) {
-                            if(wait){
-                                break;
+                        try {
+                            if (flag.get()) {
+                                Log.d("Waiting", Boolean.toString(flag.get()));
+                                Log.d("Wait","Waiting Here");
+                                Thread.sleep(2000);
                             }
                         }
+                        catch (Exception ex){
+                            ex.printStackTrace();
+                        }
+                        return allCursor;
                     }
                 }
                 else if(queryType.length>1){
@@ -400,10 +466,11 @@ public class SimpleDhtProvider extends ContentProvider {
             String[] columns = new String[] {keyColumn,valueColumn};
             MatrixCursor matrixCursor=new MatrixCursor(columns);
             matrixCursor.addRow(outputs);
-            cursor=matrixCursor;
+            allCursor=matrixCursor;
+            flag1.set(false);
             //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
             Log.d("Query",Integer.toString(cursor.getCount()));
-            return matrixCursor;
+           // return matrixCursor;
         }
         if (wait) {
             wait = false;
@@ -562,6 +629,12 @@ public class SimpleDhtProvider extends ContentProvider {
                         query(providerUri,null,receivedMessage+":",null,null,null);
                         wait=true;
                     }
+                    else if(operations[7].equals(operation)){
+                        delete(providerUri,receivedMessage,null);
+                    }
+                    else if(operations[8].equals(operation)){
+                        delete(providerUri,receivedMessage,null);
+                    }
                 }
             }
             catch (Exception ex)
@@ -718,6 +791,37 @@ public class SimpleDhtProvider extends ContentProvider {
                 catch (Exception ex){
                     ex.printStackTrace();
                 }
+            }
+            else if(operation.equals(operations[7])) {
+                try {
+                    String successor = messages[2];
+                    int sendingPort = Integer.parseInt(successor) * 2;
+                    Log.d("Client", successor);
+                    String port = Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    String outputToServer = requested_message;
+                    Log.d("Client Sending String", outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+            else if(operation.equals(operations[8])){
+                    try {
+                        String successor = messages[2];
+                        int sendingPort = Integer.parseInt(successor) * 2;
+                        Log.d("Client", successor);
+                        String port = Integer.toString(sendingPort);
+                        Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                        DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                        String outputToServer = requested_message;
+                        Log.d("Client Sending String", outputToServer);
+                        outputStream.writeUTF(outputToServer);
+                    }
+                    catch (Exception ex){
+                        ex.printStackTrace();
+                    }
             }
             return null;
         }
