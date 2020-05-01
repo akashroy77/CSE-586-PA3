@@ -45,8 +45,6 @@ public class SimpleDhtProvider extends ContentProvider {
     static final String local_identifier="@";
     static final int AVD0_PORT=11108;
     int clientPort=0;
-    final static int[] remote_ports= new int[]{11108, 11112, 11116, 11120,11124};
-    SimpleDhtHelper helper=new SimpleDhtHelper();
     static  final String[] operations= new String[]{"JOIN","SUCC_SEQUENCE","PRED_SEQUENCE","INSERT","ALL_QUERY","SINGLE_QUERY","QUERY_RESPONSE","ALL_DELETE","SINGLE_DELETE"};
     List<Integer> nodes = new ArrayList<Integer>();
     List<String> hashedNodes=new ArrayList<String>();
@@ -196,7 +194,6 @@ public class SimpleDhtProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
-        emulatorMap=helper.fillHashMap(emulatorMap);
         dbHelper = new KeyValueTableDBHelper(getContext());
         contentResolver=(this.getContext()).getContentResolver();
         try {
@@ -341,8 +338,6 @@ public class SimpleDhtProvider extends ContentProvider {
                     catch (Exception ex){
                         ex.printStackTrace();
                     }
-                    //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
-                    //return matrixCursor;
                 }
                 else {
                     String queryResult=" ";
@@ -365,7 +360,6 @@ public class SimpleDhtProvider extends ContentProvider {
                             inputQuery = queryResult.substring(0, queryResult.length() - 2);
                         }
                         outputQuery = queryType[4] + " DELIMETER " + inputQuery;
-                        Log.d("ABC", inputQuery);
                         queryMessage = queryType[0] + ":" + "ALL_QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY" + ":" + outputQuery;
                         Log.d("Sending", queryMessage);
                     }
@@ -409,7 +403,7 @@ public class SimpleDhtProvider extends ContentProvider {
                             if (flag.get()) {
                                 Log.d("Waiting", Boolean.toString(flag.get()));
                                 Log.d("Wait","Waiting Here");
-                                Thread.sleep(2000);
+                                Thread.sleep(8000);
                             }
                         }
                         catch (Exception ex){
@@ -455,7 +449,6 @@ public class SimpleDhtProvider extends ContentProvider {
 
         catch (Exception ex){
             cursor = null;
-            wait = true;
         }
         if (queryType.length>1 && queryType[1].equals(operations[6])){
             Log.d("Query","In Response");
@@ -468,14 +461,8 @@ public class SimpleDhtProvider extends ContentProvider {
             matrixCursor.addRow(outputs);
             allCursor=matrixCursor;
             flag1.set(false);
-            //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
             Log.d("Query",Integer.toString(cursor.getCount()));
-           // return matrixCursor;
         }
-        if (wait) {
-            wait = false;
-        }
-       // Log.d("End",Integer.toString(globalCursor.getCount()));
         Log.d("query", DatabaseUtils.dumpCursorToString(globalCursor));
         return cursor;
     }
@@ -501,7 +488,6 @@ public class SimpleDhtProvider extends ContentProvider {
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
-        int i=0;
         Uri providerUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
@@ -516,8 +502,6 @@ public class SimpleDhtProvider extends ContentProvider {
                     String receivedMessage=inputStream.readUTF();
                     Log.d("Server",receivedMessage);
                     String[] messages=receivedMessage.split(":");
-                    //Port
-                    int receivedPort=Integer.parseInt(messages[0]);
                     //Operation
                     String operation=messages[1];
                     //Emulator
@@ -532,13 +516,10 @@ public class SimpleDhtProvider extends ContentProvider {
                             String localSuccessor=" ";
                             String localPredecessor=" ";
                             String hashedEmu=genHash(Integer.toString(emulator));
-                            ChordNode chordNode=new ChordNode();
                             Log.d("Emu",hashedEmu+" "+emulator);
                             nodes.add(emulator);
                             hashedNodes.add(hashedEmu);
-                            i++;
                             Collections.sort(nodes,new CustomHashComparator());
-                            Collections.sort(hashedNodes,new CustomComparator());
                             int nodePosition=nodes.indexOf(emulator);
                             Log.d("Np",Integer.toString(nodePosition));
                             Log.d("Size",Integer.toString(nodes.size()));
@@ -546,23 +527,19 @@ public class SimpleDhtProvider extends ContentProvider {
                             //Last Node of the Chord
                             if(nodePosition==nodes.size()-1){
                                 localSuccessor=Integer.toString(nodes.get(0));
-                                chordNode.setSuccessor(hashedNodes.get(0));
                             }
                             else {
                                 localSuccessor=Integer.toString(nodes.get(nodePosition+1));
-                                chordNode.setSuccessor(hashedNodes.get(nodePosition+1));
                                 Log.d("Succ", Integer.toString(nodes.get(nodePosition+1)));
                             }
                             //Set Predecessor
                             //First Node of the Chord
                             if(nodePosition==0){
                                 localPredecessor=Integer.toString(nodes.get(nodes.size()-1));
-                                chordNode.setPredecessor(hashedNodes.get(nodes.size()-1));
                                 Log.d("pred",localPredecessor);
                             }
                             else {
                                 localPredecessor=Integer.toString(nodes.get(nodePosition-1));
-                                chordNode.setPredecessor(hashedNodes.get(nodePosition-1));
                             }
                             String clientSuccessorOutputString=emulator+":"+"SUCC_SEQUENCE"+":"+localSuccessor+":"+" ";
                             Log.d("Server","Sending Successor to Client"+clientSuccessorOutputString);
@@ -627,7 +604,6 @@ public class SimpleDhtProvider extends ContentProvider {
                     }
                     else if(operations[6].equals(operation)){
                         query(providerUri,null,receivedMessage+":",null,null,null);
-                        wait=true;
                     }
                     else if(operations[7].equals(operation)){
                         delete(providerUri,receivedMessage,null);
@@ -654,11 +630,6 @@ public class SimpleDhtProvider extends ContentProvider {
              */
             return;
         }
-
-        protected void setSuccessorAndPredecessor(String hash_id,String emulator){
-            // https://stackoverflow.com/questions/2784514/sort-arraylist-of-custom-objects-by-property
-
-        }
     }
 
     /***
@@ -674,7 +645,6 @@ public class SimpleDhtProvider extends ContentProvider {
         @Override
         protected Void doInBackground(String... msgs) {
             String requested_message=msgs[0];
-            SimpleDhtHelper helper=new SimpleDhtHelper();
             String[] messages=requested_message.split((":"));
             String operation= messages[1];
             if(operation.equals(operations[0])){
@@ -842,9 +812,4 @@ public class SimpleDhtProvider extends ContentProvider {
         }
     }
 }
-class CustomComparator implements Comparator<String> {
-    @Override
-    public int compare(String hash_id_1, String hash_id_2) {
-        return hash_id_1.compareTo(hash_id_2);
-    }
-}
+
