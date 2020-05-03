@@ -6,14 +6,19 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.IllegalCharsetNameException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.content.ContentProvider;
@@ -58,8 +63,8 @@ public class SimpleDhtProvider extends ContentProvider {
     MatrixCursor globalCursor=null;
     MatrixCursor allCursor=null;
     AtomicBoolean flag=new AtomicBoolean(true);
-    AtomicBoolean flag1=new AtomicBoolean(true);
     Uri globalUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
+    int count=0;
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -69,9 +74,10 @@ public class SimpleDhtProvider extends ContentProvider {
         int response=0;
         SQLiteDatabase db = dbHelper.getWritableDatabase();
         String[] deleteType=selection.split(":");
+        Log.d("Delete","In Delete");
         Cursor cursor=null;
         try {
-            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)) {
+            if (onlyAVD()) {
                 if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
                     Log.d("Delete", "here");
                     response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
@@ -96,9 +102,9 @@ public class SimpleDhtProvider extends ContentProvider {
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,deleteQuery);
                 return response;
             }
-            else if(deleteType.length>3 && deleteType[3].equals("REPEAT")){
+            else if(waitingForOthersDeletion(deleteType)){
                 // Chord has reached its root node
-                if(deleteType[0].equals(clientPort)){
+                if(rootOfChord(deleteType)){
                     Log.d("Delete","All Delete are complete");
                     return 1;
                 }
@@ -111,16 +117,28 @@ public class SimpleDhtProvider extends ContentProvider {
                 }
             }
             else {
-                cursor=query(globalUri,null,selection+":",null,null,null);
-                if(cursor!=null && cursor.getCount()>0){
-                    response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
-                    return response;
+                cursor=query(globalUri,null,selection,null,null,null);
+                Log.d("Response", DatabaseUtils.dumpCursorToString(cursor));
+                try {
+                    if (cursor != null && cursor.getCount() > 0) {
+                        Log.d("Found Delete", "Not Null Cursor");
+                        if (cursor.getColumnCount() == 3) {
+                            Log.d("Returning Null","Null");
+                            return 0;
+                        } else {
+                            response = db.delete(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, null);
+                            return response;
+                        }
+                    } else {
+                        // Forwarding Delete
+                        String deleteQuery = clientPort + ":" + "LOCAL_DELETE" + ":" + sequenceSucc;
+                        Log.d("Successor Delete", deleteQuery);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, deleteQuery);
+                        Thread.sleep(1000);
+                    }
                 }
-                else {
-                    // Forwarding Delete
-                    String deleteQuery=clientPort+":"+"LOCAL_DELETE"+":"+sequenceSucc;
-                    Log.d("Successor Delete",deleteQuery);
-                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,deleteQuery);
+                catch (Exception ex){
+                    ex.printStackTrace();
                 }
             }
         } catch (NoSuchAlgorithmException e) {
@@ -129,6 +147,31 @@ public class SimpleDhtProvider extends ContentProvider {
 
         return 0;
     }
+
+    // All Delete Checkings
+    // ---------------------------------------------------------------------------------
+    private boolean onlyAVD() throws NoSuchAlgorithmException {
+        if(sequencePred.equals(" ") || sequenceSucc.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)){
+            return true;
+        }
+        return false;
+    }
+
+    private boolean waitingForOthersDeletion(String[] deleteType){
+        if(deleteType.length>3 && deleteType[3].equals("REPEAT")){
+            return true;
+        }
+        return false;
+    }
+
+    private boolean rootOfChord(String deleteType[]){
+        if(deleteType[0].equals(clientPort)){
+            return true;
+        }
+        return false;
+    }
+
+    //---------------------------------------------------------------------------------
 
     @Override
     public String getType(Uri uri) {
@@ -159,17 +202,8 @@ public class SimpleDhtProvider extends ContentProvider {
             hashedKey=genHash(key);
             Log.d("Seq",sequencePred);
             Log.d("Seq",sequenceSucc);
-            // Only One AVD
-            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)){
-                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
-                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
-            }
-            // Key is greater than the Last Chord Node
-            else if(hashedKey.compareTo(genHash(sequencePred))>0 && hashedKey.compareTo(hashedPort)>=0 && hashedPort.compareTo(genHash(sequencePred))<0){
-                db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
-                Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
-            }
-            else if(hashedKey.compareTo(genHash(sequencePred))<0 && hashedKey.compareTo(hashedPort)<=0 && hashedPort.compareTo(genHash(sequencePred))<0){
+
+            if(isThisMyKey(hashedKey)){
                 db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
                 Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
             }
@@ -191,6 +225,30 @@ public class SimpleDhtProvider extends ContentProvider {
         }
         return uri;
     }
+
+    // All Insert Checking
+    // --------------------------------------------------------------
+    private boolean isThisMyKey(String hashedKey){
+        try {
+            // I am the only AVD Here
+            if (sequencePred.equals(" ") || sequenceSucc.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)){
+                return true;
+            }
+            // Key Belongs to the Last Node of the Chord
+            else if(genHash(sequencePred).compareTo(hashedKey)<0 && hashedKey.compareTo(hashedPort)>=0 && genHash(sequencePred).compareTo(hashedPort)>0){
+                return true;
+            }
+            // Key Belongs to the Last Node of the Chord
+            else if(genHash(sequencePred).compareTo(hashedKey)>0 && hashedKey.compareTo(hashedPort)<=0 && genHash(sequencePred).compareTo(hashedPort)>0){
+                return true;
+            }
+        }
+        catch (Exception ex){
+            ex.printStackTrace();
+        }
+        return false;
+    }
+    //-------------------------------------------------------------------
 
     @Override
     public boolean onCreate() {
@@ -238,7 +296,7 @@ public class SimpleDhtProvider extends ContentProvider {
         Log.d("Select",selection);
 
         try {
-            if (sequencePred.equals(" ") || sequencePred.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)) {
+            if (onlyAVD()) {
                 cursor=null;
                 if (selection.equals(local_identifier) || selection.equals(global_identifier)) {
                     Log.d("Query", "here");
@@ -300,7 +358,7 @@ public class SimpleDhtProvider extends ContentProvider {
 
                 return globalCursor;
             }
-            else if(queryType.length>2 && queryType[3].equals(operations[4])){
+            else if(waitingForOthersQuery(queryType)){
                 globalCursor=null;
                 Log.d("Query","Inside Global Query");
                 //Chord has come back to its root port
@@ -338,6 +396,8 @@ public class SimpleDhtProvider extends ContentProvider {
                     catch (Exception ex){
                         ex.printStackTrace();
                     }
+                    //Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                    //return matrixCursor;
                 }
                 else {
                     String queryResult=" ";
@@ -346,7 +406,7 @@ public class SimpleDhtProvider extends ContentProvider {
                     Log.d("Querying Next Successor", "here");
                     cursor=query(globalUri,null,"@",null,null,null);
                     Log.d("query", Integer.toString(cursor.getCount()));
-                     Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
+                    Log.d("query", DatabaseUtils.dumpCursorToString(cursor));
                     //https://stackoverflow.com/questions/7420783/androids-sqlite-how-to-turn-cursors-into-strings
                     //https://developer.android.com/reference/android/database/sqlite/SQLiteCursor
                     try {
@@ -360,6 +420,7 @@ public class SimpleDhtProvider extends ContentProvider {
                             inputQuery = queryResult.substring(0, queryResult.length() - 2);
                         }
                         outputQuery = queryType[4] + " DELIMETER " + inputQuery;
+                        Log.d("ABC", inputQuery);
                         queryMessage = queryType[0] + ":" + "ALL_QUERY" + ":" + sequenceSucc + ":" + "ALL_QUERY" + ":" + outputQuery;
                         Log.d("Sending", queryMessage);
                     }
@@ -390,57 +451,87 @@ public class SimpleDhtProvider extends ContentProvider {
                 if(queryType.length==1){
                     cursor=null;
                     Log.d("Query","Searching OWN AVD");
+                    Log.d("QD",selection);
                     cursor = queryBuilder.query(db, null, "key=" + "'" + selection + "'", null, null, null, null);
+                    Log.d("Response", DatabaseUtils.dumpCursorToString(cursor));
                     if(cursor.getCount()>0){
                         return cursor;
                     }
                     else {
                         Log.d("Query","Could not find in local AVD");
-                        String queryMessage = clientPort + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+selection;
+                        int localCount=count+1;
+                        String queryMessage = clientPort + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+selection+"#"+localCount;
                         Log.d("Query",queryMessage);
                         new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
+                        semaup();
+                    }
+                }
+                else if(isThisNextAVD(queryType)){
+                    if(queryType[3].equals("LOCAL_QUERY")){
+                        String[] deleteString=queryType[4].split("#");
+                        Log.d("DeleteString",deleteString[1]);
+                        Log.d("DleteString",Integer.toString(nodes.size()));
+                        String queryResult=" ";
+                        String inputQuery=" ";
+                        Log.d("Query","I am in the next AVD");
+                        cursor = queryBuilder.query(db, null, "key=" + "'" + deleteString[0] + "'", null, null, null, null);
+                        Log.d("Query", Integer.toString(cursor.getCount()));
                         try {
-                            if (flag.get()) {
-                                Log.d("Waiting", Boolean.toString(flag.get()));
-                                Log.d("Wait","Waiting Here");
-                                Thread.sleep(8000);
+                            if (cursor.getCount() > 0) {
+                                Log.d("Query", "Found it");
+                                Log.d("Response", DatabaseUtils.dumpCursorToString(cursor));
+                                if (cursor.moveToFirst()) {
+                                    Log.d("Query", "Converting Cursor");
+                                    do {
+                                        queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + ":";
+                                        queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
+                                    }
+                                    while (cursor.moveToNext());
+                                    Log.d("Sending", queryResult);
+                                    inputQuery = queryResult.substring(0, queryResult.length() - 2);
+                                }
+
+                                Log.d("Query", inputQuery);
+                                int sendingEmulator = Integer.parseInt(queryType[0]) / 2;
+                                String queryMessage = queryType[0] + ":" + "QUERY_RESPONSE" + ":" + sendingEmulator + ":" + "RETURN" + ":" + inputQuery;
+                                Log.d("Query", queryMessage);
+                                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, queryMessage);
+                            }
+                            else if (queryType[0].equals(Integer.toString(clientPort))) {
+                                try {
+                                    Log.d("Returning",deleteString[1]);
+                                    semadown();
+                                    MatrixCursor deleteCursor;
+                                    String[] outputs=new String[]{"null","null","null"};
+                                    String keyColumn = KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
+                                    String valueColumn = KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
+                                    String nullColumn="Null Value";
+                                    String[] columns = new String[]{keyColumn, valueColumn,nullColumn};
+                                    MatrixCursor matrixCursor = new MatrixCursor(columns);
+                                    matrixCursor.addRow(outputs);
+                                    cursor=matrixCursor;
+                                    Log.d("Response", DatabaseUtils.dumpCursorToString(cursor));
+                                }
+                                catch (Exception ex){
+                                    ex.printStackTrace();
+                                }
+                                return cursor;
+                            }
+                            else {
+                                try {
+                                    Log.d("Query", "Not Found so passing it to other" + " " + queryType[0]);
+                                    int localCount = Integer.parseInt(deleteString[1]);
+                                    localCount = localCount + 1;
+                                    String queryMessage = queryType[0] + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY" + ":" + deleteString[0]+"#"+localCount;
+                                    Log.d("Query", queryMessage);
+                                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, queryMessage);
+                                } catch (Exception ex) {
+                                    ex.printStackTrace();
+                                }
                             }
                         }
                         catch (Exception ex){
                             ex.printStackTrace();
-                        }
-                        return allCursor;
-                    }
-                }
-                else if(queryType.length>1){
-                    if(queryType[3].equals("LOCAL_QUERY")){
-                        String queryResult=" ";
-                        Log.d("Query","I am in the next AVD");
-                        Log.d("Query",queryType[4]);
-                        cursor = queryBuilder.query(db, null, "key=" + "'" + queryType[4] + "'", null, null, null, null);
-                        Log.d("Query", Integer.toString(cursor.getCount()));
-                        if(cursor.getCount()>0){
-                            Log.d("Query", "Found it");
-                            if(cursor.moveToFirst()) {
-                                Log.d("Query","Converting Cursor");
-                                do{
-                                    queryResult +=cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY)) + ":";
-                                    queryResult += cursor.getString(cursor.getColumnIndex(KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE)) + "%%";
-                                }
-                                while (cursor.moveToNext());
-                            }
-                            String inputQuery = queryResult.substring(0, queryResult.length() - 2);
-                            Log.d("Query",inputQuery);
-                            int sendingEmulator=Integer.parseInt(queryType[0])/2;
-                            String queryMessage = clientPort + ":" + "QUERY_RESPONSE" + ":" + sendingEmulator + ":" + "RETURN"+":"+selection+":"+inputQuery;
-                            Log.d("Query",queryMessage);
-                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
-                        }
-                        else {
-                            Log.d("Query","Not Found so passing it to other");
-                            String queryMessage = queryType[0] + ":" + "SINGLE_QUERY" + ":" + sequenceSucc + ":" + "LOCAL_QUERY"+":"+queryType[4];
-                            Log.d("Query",queryMessage);
-                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,queryMessage);
                         }
                     }
                 }
@@ -449,23 +540,75 @@ public class SimpleDhtProvider extends ContentProvider {
 
         catch (Exception ex){
             cursor = null;
+            semadown();
         }
-        if (queryType.length>1 && queryType[1].equals(operations[6])){
+        if (isResponse(queryType)){
             Log.d("Query","In Response");
-            String[] outputs=new String[]{queryType[10].trim(),queryType[11]};
-            // https://stackoverflow.com/questions/28936424/converting-mult5mentional-string-array-to-cursor
-            String keyColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
-            String valueColumn= KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
-            String[] columns = new String[] {keyColumn,valueColumn};
-            MatrixCursor matrixCursor=new MatrixCursor(columns);
-            matrixCursor.addRow(outputs);
-            allCursor=matrixCursor;
-            flag1.set(false);
-            Log.d("Query",Integer.toString(cursor.getCount()));
+            try {
+                String[] outputs = new String[]{queryType[4].trim(), queryType[5]};
+                Log.d("Response",Integer.toString(queryType.length));
+                Log.d("Response",queryType[4]);
+                Log.d("Response",queryType[5]);
+                // https://stackoverflow.com/questions/28936424/converting-mult5mentional-string-array-to-cursor
+                String keyColumn = KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_KEY;
+                String valueColumn = KeyValueTableContract.KeyValueTableEntry.COLUMN_NAME_VALUE;
+                String[] columns = new String[]{keyColumn, valueColumn};
+                MatrixCursor matrixCursor = new MatrixCursor(columns);
+                matrixCursor.addRow(outputs);
+                cursor=matrixCursor;
+                Log.d("Response", DatabaseUtils.dumpCursorToString(matrixCursor));
+            }
+            catch (Exception ex){
+                cursor = null;
+                semadown();
+                ex.printStackTrace();
+                return cursor;
+
+            }
         }
-        Log.d("query", DatabaseUtils.dumpCursorToString(globalCursor));
+        if (wait) {
+            wait = false;
+        }
         return cursor;
     }
+
+    // All Query Checking
+    // -------------------------------------------------------------------------------------
+
+    private void semaup(){
+        while (true) {
+            if(wait){
+                break;
+            }
+        }
+    }
+
+    private void semadown(){
+        wait=true;
+    }
+
+    private boolean waitingForOthersQuery(String[] queryType){
+        if(queryType.length>2 && queryType[3].equals(operations[4])){
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isResponse(String[] queryType){
+        if(queryType.length>1 && queryType[1].equals(operations[6])){
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isThisNextAVD(String[] queryType){
+        if(queryType.length>1){
+            return true;
+        }
+        return false;
+    }
+
+    //-------------------------------------------------------------------------------------
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
@@ -488,6 +631,7 @@ public class SimpleDhtProvider extends ContentProvider {
      */
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
+        int i=0;
         Uri providerUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
         @Override
         protected Void doInBackground(ServerSocket... sockets) {
@@ -502,6 +646,8 @@ public class SimpleDhtProvider extends ContentProvider {
                     String receivedMessage=inputStream.readUTF();
                     Log.d("Server",receivedMessage);
                     String[] messages=receivedMessage.split(":");
+                    //Port
+                    int receivedPort=Integer.parseInt(messages[0]);
                     //Operation
                     String operation=messages[1];
                     //Emulator
@@ -519,6 +665,7 @@ public class SimpleDhtProvider extends ContentProvider {
                             Log.d("Emu",hashedEmu+" "+emulator);
                             nodes.add(emulator);
                             hashedNodes.add(hashedEmu);
+                            i++;
                             Collections.sort(nodes,new CustomHashComparator());
                             int nodePosition=nodes.indexOf(emulator);
                             Log.d("Np",Integer.toString(nodePosition));
@@ -603,7 +750,8 @@ public class SimpleDhtProvider extends ContentProvider {
                         query(providerUri,null,receivedMessage+":",null,null,null);
                     }
                     else if(operations[6].equals(operation)){
-                        query(providerUri,null,receivedMessage+":",null,null,null);
+                        query(providerUri,null,receivedMessage,null,null,null);
+                        semadown();
                     }
                     else if(operations[7].equals(operation)){
                         delete(providerUri,receivedMessage,null);
@@ -778,38 +926,37 @@ public class SimpleDhtProvider extends ContentProvider {
                 }
             }
             else if(operation.equals(operations[8])){
-                    try {
-                        String successor = messages[2];
-                        int sendingPort = Integer.parseInt(successor) * 2;
-                        Log.d("Client", successor);
-                        String port = Integer.toString(sendingPort);
-                        Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
-                        DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
-                        String outputToServer = requested_message;
-                        Log.d("Client Sending String", outputToServer);
-                        outputStream.writeUTF(outputToServer);
-                    }
-                    catch (Exception ex){
-                        ex.printStackTrace();
-                    }
+                try {
+                    String successor = messages[2];
+                    int sendingPort = Integer.parseInt(successor) * 2;
+                    Log.d("Client", successor);
+                    String port = Integer.toString(sendingPort);
+                    Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(port));
+                    DataOutputStream outputStream = new DataOutputStream(socket.getOutputStream());
+                    String outputToServer = requested_message;
+                    Log.d("Client Sending String", outputToServer);
+                    outputStream.writeUTF(outputToServer);
+                }
+                catch (Exception ex){
+                    ex.printStackTrace();
+                }
             }
             return null;
         }
     }
-    class CustomHashComparator implements Comparator<Integer>
-    {
+    class CustomHashComparator implements Comparator<Integer> {
         @Override
         public int compare(Integer lhs, Integer rhs) {
-            String gen_x = null;
-            String gen_y = null;
+            String lhsHash = null;
+            String rhsHash = null;
             try {
-                gen_x = genHash(Integer.toString(lhs));
-                gen_y = genHash(Integer.toString(rhs));
+                lhsHash = genHash(Integer.toString(lhs));
+                rhsHash = genHash(Integer.toString(rhs));
             } catch (NoSuchAlgorithmException e) {
                 e.printStackTrace();
             }
-            return gen_x.compareTo(gen_y);
+            return lhsHash.compareTo(rhsHash);
         }
     }
-}
 
+    }
