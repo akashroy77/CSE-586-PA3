@@ -55,13 +55,16 @@ public class SimpleDhtProvider extends ContentProvider {
     List<String> hashedNodes=new ArrayList<String>();
     HashMap<Integer,Integer> emulatorMap=new HashMap<Integer, Integer>();
     String outputQuery="";
+    //Successor
     String sequenceSucc=" ";
+    //Predecessor
     String sequencePred=" ";
     String hashedPort=" ";
+    //Sema Variable
     boolean wait=false;
     Cursor cursor=null;
     MatrixCursor globalCursor=null;
-    MatrixCursor allCursor=null;
+    //Sema Variable
     AtomicBoolean flag=new AtomicBoolean(true);
     Uri globalUri=Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
     int count=0;
@@ -150,6 +153,7 @@ public class SimpleDhtProvider extends ContentProvider {
 
     // All Delete Checkings
     // ---------------------------------------------------------------------------------
+    //Only One AVD Exist in the system
     private boolean onlyAVD() throws NoSuchAlgorithmException {
         if(sequencePred.equals(" ") || sequenceSucc.equals(" ") || genHash(sequencePred).equals(hashedPort) && genHash(sequenceSucc).equals(hashedPort)){
             return true;
@@ -157,6 +161,7 @@ public class SimpleDhtProvider extends ContentProvider {
         return false;
     }
 
+    //* Deletion (Waiting for all the AVD to Delete)
     private boolean waitingForOthersDeletion(String[] deleteType){
         if(deleteType.length>3 && deleteType[3].equals("REPEAT")){
             return true;
@@ -211,6 +216,7 @@ public class SimpleDhtProvider extends ContentProvider {
                 String insertMessage=clientPort+":"+"INSERT"+":"+sequenceSucc+":"+key+":"+value;
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,insertMessage);
             }
+            // General Situation . My Key
             else if(hashedKey.compareTo(genHash(sequencePred))>0 && hashedKey.compareTo(hashedPort)<=0){
                 db.insertWithOnConflict(KeyValueTableContract.KeyValueTableEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_REPLACE);
                 Log.d("INSERT","Inserted in Same AVD "+hashedPort+" : "+key);
